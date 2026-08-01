@@ -24,14 +24,16 @@ import {
 /**
  * Farm Fusion AI — Advanced Hackathon Registration
  * -------------------------------------------------
- * v3 — fixes over v2:
- *  1. Downloadable ticket (canvas PNG) now mirrors the on-screen ticket
- *     exactly: dark stub panel, dashed divider, QR centered inside the
- *     stub with its "SCAN AT CHECK-IN" label, rounded team-id badge —
- *     nothing floats over the wrong background anymore.
- *  2. Fully responsive layout: hero, form grid, member cards, and the
- *     ticket itself reflow for phones (<640px) and small phones (<420px)
- *     using real CSS breakpoints instead of a single fixed desktop layout.
+ * v4 — fixes over v3:
+ *  1. Team Name and Team Leader Name now validate as letters/spaces only
+ *     (no digits or symbols allowed).
+ *  2. Phone Number and Alternate Phone Number now strictly require exactly
+ *     10 digits (not fewer, not more).
+ *  3. Email validation kept/verified with a proper email regex.
+ *  4. The QR code on the success ticket now encodes the actual team and
+ *     project information (team name, leader, college, email, phone,
+ *     project title, team ID) instead of just the bare team ID, so
+ *     scanning it at check-in actually surfaces useful data.
  *
  * Backend hook points are marked with  // BACKEND:  comments.
  * Nothing here uses localStorage/sessionStorage (not safe in all embed contexts) —
@@ -42,6 +44,11 @@ const SKILLS = ["AI/ML", "Frontend", "Backend", "UI/UX", "Hardware/IoT", "Data S
 const MAX_MEMBERS = 6; // includes leader
 const REGISTRATION_DEADLINE = new Date("2026-08-15T23:59:59");
 const STEPS = ["Team", "Members", "Project", "Review"];
+
+// Validation regexes
+const NAME_REGEX = /^[A-Za-z\s]+$/; // letters and spaces only
+const PHONE_REGEX = /^\d{10}$/; // exactly 10 digits
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 
@@ -139,14 +146,29 @@ export default function FarmFusionRegistrationForm() {
   const validateStep = (s) => {
     const e = {};
     if (s === 0) {
+      // Team Name: required + letters/spaces only
       if (!team.teamName.trim()) e.teamName = "Team name is required";
+      else if (!NAME_REGEX.test(team.teamName.trim())) e.teamName = "Team name should contain letters only";
       else if (nameCheck.status === "taken") e.teamName = "Please choose a different team name";
+
+      // Team Leader Name: required + letters/spaces only, no digits
       if (!team.leaderName.trim()) e.leaderName = "Team leader name is required";
+      else if (!NAME_REGEX.test(team.leaderName.trim())) e.leaderName = "Leader name should contain letters only";
+
       if (!team.college.trim()) e.college = "College / organization is required";
+
+      // Email validation
       if (!team.email.trim()) e.email = "Email is required";
-      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(team.email)) e.email = "Enter a valid email";
+      else if (!EMAIL_REGEX.test(team.email.trim())) e.email = "Enter a valid email";
+
+      // Phone: required, exactly 10 digits (not less, not more)
       if (!team.phone.trim()) e.phone = "Phone number is required";
-      else if (!/^\d{10}$/.test(team.phone.replace(/\D/g, ""))) e.phone = "Enter a valid 10-digit number";
+      else if (!PHONE_REGEX.test(team.phone.trim())) e.phone = "Phone number must be exactly 10 digits";
+
+      // Alternate phone is optional, but if provided must also be exactly 10 digits
+      if (team.altPhone.trim() && !PHONE_REGEX.test(team.altPhone.trim())) {
+        e.altPhone = "Alternate phone number must be exactly 10 digits";
+      }
     }
     if (s === 2) {
       if (!project.title.trim()) e.title = "Project title is required";
@@ -342,7 +364,9 @@ export default function FarmFusionRegistrationForm() {
                 label="Phone Number"
                 required
                 type="tel"
-                placeholder="Enter phone number"
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="Enter 10-digit phone number"
                 value={team.phone}
                 onChange={updateTeam("phone")}
                 error={errors.phone}
@@ -352,9 +376,12 @@ export default function FarmFusionRegistrationForm() {
                   icon={<Phone size={16} />}
                   label="Alternate Phone Number"
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   placeholder="Enter alternate phone number"
                   value={team.altPhone}
                   onChange={updateTeam("altPhone")}
+                  error={errors.altPhone}
                 />
                 <label style={styles.sameAsRow}>
                   <input
@@ -647,12 +674,28 @@ function ReviewBlock({ label, children, onEdit }) {
 
 function SuccessTicket({ team, teamId, project, onReset }) {
   const canvasRef = useRef(null);
+
+  // QR now encodes the full team/user information (not just the bare team ID)
+  // so scanning it at check-in surfaces team name, leader, college, email,
+  // phone, and project title alongside the team ID.
+  const qrInfoText = teamId
+    ? [
+        `Team Name: ${team.teamName || "—"}`,
+        `Team ID: ${teamId}`,
+        `Leader: ${team.leaderName || "—"}`,
+        `College: ${team.college || "—"}`,
+        `Email: ${team.email || "—"}`,
+        `Phone: ${team.phone || "—"}`,
+        `Project: ${project.title || "—"}`,
+      ].join("\n")
+    : null;
+
   // Public QR-image API called as a plain <img src>, so no npm package is
   // required — this renders fine both in restricted preview sandboxes and
   // in a real app. Swap for a self-hosted generator if you need to work
   // fully offline or avoid the third-party call.
-  const qrDataUrl = teamId
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=1&data=${encodeURIComponent(teamId)}`
+  const qrDataUrl = qrInfoText
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=1&data=${encodeURIComponent(qrInfoText)}`
     : null;
 
   // Renders the same two-panel ticket (cream main + dark stub with QR)
