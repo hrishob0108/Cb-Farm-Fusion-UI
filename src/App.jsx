@@ -19,31 +19,40 @@ import {
   Check,
   Send,
   Pencil,
+  Home as HomeIcon,
+  ClipboardList,
+  AlertTriangle,
 } from "lucide-react";
 
 /**
- * Farm Fusion AI — Advanced Hackathon Registration
+ * Farm Fusion AI — Registration Portal
  * -------------------------------------------------
- * v4 — fixes over v3:
- *  1. Team Name and Team Leader Name now validate as letters/spaces only
- *     (no digits or symbols allowed).
- *  2. Phone Number and Alternate Phone Number now strictly require exactly
- *     10 digits (not fewer, not more).
- *  3. Email validation kept/verified with a proper email regex.
- *  4. The QR code on the success ticket now encodes the actual team and
- *     project information (team name, leader, college, email, phone,
- *     project title, team ID) instead of just the bare team ID, so
- *     scanning it at check-in actually surfaces useful data.
+ * Restructured (v5) to a two-page format:
+ *   1. HOME — hero + live seat availability + registration progress,
+ *      "Register Now" gate (disabled once seats are full).
+ *   2. REGISTRATION DESK — a single scrolling page broken into clearly
+ *      labelled sections (Team Name / Leader Details / Team Members /
+ *      Project / Review) instead of a click-through step wizard.
+ *
+ * All original functionality is preserved as-is:
+ *  - Team Name / Leader Name letters-only validation
+ *  - Phone / Alternate phone exactly-10-digit validation
+ *  - Email regex validation
+ *  - Live team-name availability check (simulated)
+ *  - Invite-by-email or add-manually team members, skills chips
+ *  - Project details
+ *  - Review + terms acceptance
+ *  - Success ticket with QR code encoding full team/project info,
+ *    canvas-rendered PNG download, and native share
  *
  * Backend hook points are marked with  // BACKEND:  comments.
- * Nothing here uses localStorage/sessionStorage (not safe in all embed contexts) —
- * swap the marked spots for real API calls to persist drafts / send invites.
+ * Nothing here uses localStorage/sessionStorage.
  */
 
 const SKILLS = ["AI/ML", "Frontend", "Backend", "UI/UX", "Hardware/IoT", "Data Science", "Mobile", "DevOps"];
 const MAX_MEMBERS = 6; // includes leader
 const REGISTRATION_DEADLINE = new Date("2026-08-15T23:59:59");
-const STEPS = ["Team", "Members", "Project", "Review"];
+const TEAM_CAPACITY = 150; // BACKEND: fetch real capacity on mount
 
 // Validation regexes
 const NAME_REGEX = /^[A-Za-z\s]+$/; // letters and spaces only
@@ -64,8 +73,17 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+function getTimeLeft() {
+  const diff = REGISTRATION_DEADLINE - new Date();
+  if (diff <= 0) return { days: 0, hours: 0, mins: 0, closed: true };
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const mins = Math.floor((diff % 3600000) / 60000);
+  return { days, hours, mins, closed: false };
+}
+
 export default function FarmFusionRegistrationForm() {
-  const [step, setStep] = useState(0);
+  const [page, setPage] = useState("home"); // home | register
   const [team, setTeam] = useState({ teamName: "", leaderName: "", college: "", email: "", phone: "", altPhone: "" });
   const [members, setMembers] = useState([]); // additional members beyond the leader
   const [project, setProject] = useState({ title: "", problem: "" });
@@ -81,15 +99,6 @@ export default function FarmFusionRegistrationForm() {
     const t = setInterval(() => setTimeLeft(getTimeLeft()), 60_000);
     return () => clearInterval(t);
   }, []);
-
-  function getTimeLeft() {
-    const diff = REGISTRATION_DEADLINE - new Date();
-    if (diff <= 0) return { days: 0, hours: 0, mins: 0, closed: true };
-    const days = Math.floor(diff / 86400000);
-    const hours = Math.floor((diff % 86400000) / 3600000);
-    const mins = Math.floor((diff % 3600000) / 60000);
-    return { days, hours, mins, closed: false };
-  }
 
   useEffect(() => {
     if (team.teamName.trim().length >= 3 && !teamId) {
@@ -122,6 +131,9 @@ export default function FarmFusionRegistrationForm() {
   );
   const allMembers = [leaderMember, ...members];
 
+  const seatsLeft = Math.max(TEAM_CAPACITY - registeredCount, 0);
+  const isFull = seatsLeft <= 0 || timeLeft.closed;
+
   const updateTeam = (field) => (e) => setTeam((t) => ({ ...t, [field]: e.target.value }));
   const updateProject = (field) => (e) => setProject((p) => ({ ...p, [field]: e.target.value }));
 
@@ -143,73 +155,166 @@ export default function FarmFusionRegistrationForm() {
     setMembers((m) => m.map((x) => (x.id === id ? { ...x, invited: true } : x)));
   };
 
-  const validateStep = (s) => {
+  // Validates every section at once (the page is now one continuous scroll
+  // instead of a click-through wizard), and returns the first section with
+  // an error so the caller can scroll to it.
+  const validateAll = () => {
     const e = {};
-    if (s === 0) {
-      // Team Name: required + letters/spaces only
-      if (!team.teamName.trim()) e.teamName = "Team name is required";
-      else if (!NAME_REGEX.test(team.teamName.trim())) e.teamName = "Team name should contain letters only";
-      else if (nameCheck.status === "taken") e.teamName = "Please choose a different team name";
+    if (!team.teamName.trim()) e.teamName = "Team name is required";
+    else if (!NAME_REGEX.test(team.teamName.trim())) e.teamName = "Team name should contain letters only";
+    else if (nameCheck.status === "taken") e.teamName = "Please choose a different team name";
 
-      // Team Leader Name: required + letters/spaces only, no digits
-      if (!team.leaderName.trim()) e.leaderName = "Team leader name is required";
-      else if (!NAME_REGEX.test(team.leaderName.trim())) e.leaderName = "Leader name should contain letters only";
+    if (!team.leaderName.trim()) e.leaderName = "Team leader name is required";
+    else if (!NAME_REGEX.test(team.leaderName.trim())) e.leaderName = "Leader name should contain letters only";
 
-      if (!team.college.trim()) e.college = "College / organization is required";
+    if (!team.college.trim()) e.college = "College / organization is required";
 
-      // Email validation
-      if (!team.email.trim()) e.email = "Email is required";
-      else if (!EMAIL_REGEX.test(team.email.trim())) e.email = "Enter a valid email";
+    if (!team.email.trim()) e.email = "Email is required";
+    else if (!EMAIL_REGEX.test(team.email.trim())) e.email = "Enter a valid email";
 
-      // Phone: required, exactly 10 digits (not less, not more)
-      if (!team.phone.trim()) e.phone = "Phone number is required";
-      else if (!PHONE_REGEX.test(team.phone.trim())) e.phone = "Phone number must be exactly 10 digits";
+    if (!team.phone.trim()) e.phone = "Phone number is required";
+    else if (!PHONE_REGEX.test(team.phone.trim())) e.phone = "Phone number must be exactly 10 digits";
 
-      // Alternate phone is optional, but if provided must also be exactly 10 digits
-      if (team.altPhone.trim() && !PHONE_REGEX.test(team.altPhone.trim())) {
-        e.altPhone = "Alternate phone number must be exactly 10 digits";
-      }
+    if (team.altPhone.trim() && !PHONE_REGEX.test(team.altPhone.trim())) {
+      e.altPhone = "Alternate phone number must be exactly 10 digits";
     }
-    if (s === 2) {
-      if (!project.title.trim()) e.title = "Project title is required";
-    }
-    if (s === 3) {
-      if (!agreed) e.agreed = "Please accept the terms and conditions";
-    }
+
+    if (!project.title.trim()) e.title = "Project title is required";
+
+    if (!agreed) e.agreed = "Please accept the terms and conditions";
+
     setErrors(e);
-    return Object.keys(e).length === 0;
+    return e;
   };
 
-  const goNext = () => {
-    if (!validateStep(step)) return;
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
-  };
-  const goBack = () => setStep((s) => Math.max(s - 1, 0));
+  const sectionRefs = { team: useRef(null), members: useRef(null), project: useRef(null), review: useRef(null) };
+  const scrollToSection = (key) => sectionRefs[key]?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!validateStep(3)) return;
+    const e2 = validateAll();
+    if (Object.keys(e2).length > 0) {
+      if (e2.teamName || e2.leaderName || e2.college || e2.email || e2.phone || e2.altPhone) scrollToSection("team");
+      else if (e2.title) scrollToSection("project");
+      else if (e2.agreed) scrollToSection("review");
+      return;
+    }
     // BACKEND: fetch('/api/register', { method:'POST', body: JSON.stringify({ team, members: allMembers, project, teamId }) })
     console.log("Farm Fusion AI registration submitted:", { team, members: allMembers, project, teamId });
     setRegisteredCount((c) => c + 1);
     setSubmitted(true);
   };
 
+  const goHome = () => setPage("home");
+  const goRegister = () => {
+    if (isFull) return;
+    setPage("register");
+  };
+
   if (submitted) {
     return (
       <div style={styles.page} className="ffai-page">
         <CircuitBackdrop />
-        <SuccessTicket team={team} teamId={teamId} project={project} onReset={() => setSubmitted(false)} />
+        <NavBar page="register" onHome={() => { setSubmitted(false); setPage("home"); }} onRegister={() => setSubmitted(false)} />
+        <SuccessTicket
+          team={team}
+          teamId={teamId}
+          project={project}
+          onReset={() => setSubmitted(false)}
+          onHome={() => { setSubmitted(false); setPage("home"); }}
+        />
       </div>
     );
   }
 
-  const pct = ((step + 1) / STEPS.length) * 100;
-
   return (
     <div style={styles.page} className="ffai-page">
       <CircuitBackdrop />
-      <form style={styles.card} onSubmit={handleSubmit} noValidate>
+      <NavBar page={page} onHome={goHome} onRegister={goRegister} />
+
+      {page === "home" && (
+        <HomePage
+          registeredCount={registeredCount}
+          seatsLeft={seatsLeft}
+          isFull={isFull}
+          timeLeft={timeLeft}
+          onRegister={goRegister}
+        />
+      )}
+
+      {page === "register" && (
+        <RegisterPage
+          team={team}
+          updateTeam={updateTeam}
+          teamId={teamId}
+          nameCheck={nameCheck}
+          errors={errors}
+          allMembers={allMembers}
+          leaderMember={leaderMember}
+          members={members}
+          addMember={addMember}
+          removeMember={removeMember}
+          updateMember={updateMember}
+          toggleSkill={toggleSkill}
+          sendInvite={sendInvite}
+          project={project}
+          updateProject={updateProject}
+          agreed={agreed}
+          setAgreed={setAgreed}
+          handleSubmit={handleSubmit}
+          sectionRefs={sectionRefs}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Nav                                                                 */
+/* ------------------------------------------------------------------ */
+
+function NavBar({ page, onHome, onRegister }) {
+  return (
+    <div style={styles.navBar} className="ffai-navbar">
+      <button type="button" onClick={onHome} style={styles.navLogo} className="ffai-nav-logo">
+        <span style={styles.navLogoBadge}>
+          <Sprout size={16} color="#F7F4EA" />
+        </span>
+        Farm Fusion<span style={{ color: "#3F9142" }}>AI</span>
+      </button>
+      <div style={styles.navPillRow}>
+        <button
+          type="button"
+          onClick={onHome}
+          style={{ ...styles.navPill, ...(page === "home" ? styles.navPillActive : {}) }}
+        >
+          <HomeIcon size={13} /> Home
+        </button>
+        <button
+          type="button"
+          onClick={onRegister}
+          style={{ ...styles.navPill, ...(page === "register" ? styles.navPillActive : {}) }}
+        >
+          <ClipboardList size={13} /> Register
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Home page                                                           */
+/* ------------------------------------------------------------------ */
+
+function HomePage({ registeredCount, seatsLeft, isFull, timeLeft, onRegister }) {
+  const pct = Math.min((registeredCount / TEAM_CAPACITY) * 100, 100);
+
+  return (
+    <div style={styles.homeWrap} className="ffai-home-wrap">
+      <div style={styles.homeCard} className="ffai-home-card">
+        <span style={styles.cornerTagLeft} className="ffai-corner-tag-left">SEASON 01</span>
+        <span style={styles.cornerTagRight} className="ffai-corner-tag-right">HARVEST 2026</span>
+
         <div style={styles.heroZone} className="ffai-hero">
           <svg style={styles.heroBackdropSvg} viewBox="0 0 660 230" preserveAspectRatio="xMidYMax slice">
             <defs>
@@ -226,7 +331,6 @@ export default function FarmFusionRegistrationForm() {
             <rect x="0" y="0" width="660" height="230" fill="url(#heroSun)" />
             <path d="M0 190 Q160 150 330 178 T660 165 V230 H0 Z" fill="#CFE3B8" opacity="0.8" />
             <path d="M0 205 Q200 185 400 200 T660 195 V230 H0 Z" fill="#B9D89E" opacity="0.75" />
-            {/* farmhouse + windmill, right side */}
             <g transform="translate(520,120)" opacity="0.85">
               <line x1="46" y1="0" x2="46" y2="70" stroke="#5C6B4F" strokeWidth="2" />
               <g transform="translate(46,0)">
@@ -238,7 +342,6 @@ export default function FarmFusionRegistrationForm() {
               <polygon points="-32,46 -11,28 10,46" fill="#3F7A3B" />
               <rect x="-16" y="54" width="8" height="10" fill="#DCEFD6" />
             </g>
-            {/* dotted circuit trails from top corners */}
             <g stroke="#2E6B2A" strokeWidth="1.4" opacity="0.35" fill="none">
               <path d="M20 14 L60 14 L60 44 L92 44" strokeDasharray="1 6" strokeLinecap="round" />
               <path d="M640 14 L600 14 L600 40 L570 40" strokeDasharray="1 6" strokeLinecap="round" />
@@ -254,6 +357,10 @@ export default function FarmFusionRegistrationForm() {
               <span style={styles.eyebrowRule} />
             </div>
 
+            <div style={styles.homeEmblem}>
+              <Sprout size={26} color="#F7F4EA" />
+            </div>
+
             <h1 style={styles.title} className="ffai-title">
               Farm Fusion<span style={styles.titleAccent}>AI</span>
             </h1>
@@ -263,269 +370,69 @@ export default function FarmFusionRegistrationForm() {
               <span style={styles.hackathonText} className="ffai-hackathon-text">HACKATHON</span>
               <ArrowLeft size={16} color="#3F7A3B" />
             </div>
-
-            {/* Floating glass stat bar — overlaps the section boundary, echoing the
-                reference's search bar that straddles hero photo and content. */}
-            <div style={styles.glassBarWrap}>
-              <div style={styles.glassBar} className="ffai-glassbar">
-                <div style={styles.glassBarItem} className="ffai-glassbar-item">
-                  <Users size={15} color="#3F7A3B" />
-                  <span>
-                    <strong>{registeredCount}</strong> teams registered
-                  </span>
-                </div>
-                <div style={styles.glassBarDivider} className="ffai-glassbar-divider" />
-                <div style={styles.glassBarItem} className="ffai-glassbar-item">
-                  <Clock size={15} color="#3F7A3B" />
-                  {timeLeft.closed ? (
-                    <span>Registration closed</span>
-                  ) : (
-                    <span>
-                      <strong>
-                        {timeLeft.days}d {timeLeft.hours}h {timeLeft.mins}m
-                      </strong>{" "}
-                      left
-                    </span>
-                  )}
-                </div>
-              </div>
-              {teamId && (
-                <div style={styles.waxSeal} className="ffai-wax-seal">
-                  <Sprout size={16} color="#F7F4EA" />
-                  <span style={styles.waxSealText}>{teamId}</span>
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
-        <div style={styles.formZone} className="ffai-formzone">
-        <Stepper step={step} pct={pct} />
+        <div style={styles.homeBody} className="ffai-home-body">
+          <div style={{ ...styles.alertBox, ...(isFull ? styles.alertBoxFull : styles.alertBoxOpen) }}>
+            {isFull ? <AlertTriangle size={18} color="#B4491F" /> : <Sprout size={18} color="#2E6B2A" />}
+            <div style={styles.alertTextWrap}>
+              <p style={styles.alertTitle}>
+                {isFull ? "Field is full" : "Seeds are sowing"}
+              </p>
+              <p style={styles.alertSubtitle}>
+                {isFull
+                  ? "All grower slots have been claimed for this season."
+                  : `${seatsLeft} seat${seatsLeft === 1 ? "" : "s"} left in the field — register before it fills up!`}
+              </p>
+            </div>
+          </div>
 
-        {step === 0 && (
-          <div>
-            <SectionLabel icon={<Sprout size={16} />} text="TEAM DETAILS" noMarginTop />
-            <div style={styles.grid2} className="ffai-grid2">
-              <div>
-                <Field
-                  icon={<User size={16} />}
-                  label="Team Name"
-                  required
-                  placeholder="Enter your team name"
-                  value={team.teamName}
-                  onChange={updateTeam("teamName")}
-                  error={errors.teamName}
-                />
-                {!errors.teamName && nameCheck.status !== "idle" && (
-                  <p
-                    style={{
-                      ...styles.helperText,
-                      marginTop: 4,
-                      color: nameCheck.status === "taken" ? "#B4491F" : nameCheck.status === "ok" ? "#2E6B2A" : "#4B6350",
-                    }}
-                  >
-                    {nameCheck.status === "checking" && "Checking availability…"}
-                    {nameCheck.status === "ok" && "✓ Team name is available"}
-                    {nameCheck.status === "taken" && "This team name is already registered"}
-                  </p>
+          <div style={styles.progressCard}>
+            <div style={styles.progressHeaderRow}>
+              <span style={styles.progressLabel}>
+                <ArrowRight size={13} color="#3F7A3B" /> PLANTING PROGRESS
+              </span>
+              <span style={styles.progressCount}>
+                {registeredCount}/{TEAM_CAPACITY}
+              </span>
+            </div>
+            <div style={styles.progressTrack}>
+              <div style={{ ...styles.progressFill, width: `${pct}%` }} />
+              <span style={{ ...styles.progressMarker, left: `calc(${pct}% - 11px)` }}>
+                <Sprout size={11} color="#14532B" />
+              </span>
+            </div>
+          </div>
+
+          <div style={styles.glassBarWrap}>
+            <div style={styles.glassBar} className="ffai-glassbar">
+              <div style={styles.glassBarItem} className="ffai-glassbar-item">
+                <Users size={15} color="#3F7A3B" />
+                <span>
+                  <strong>{registeredCount}</strong> teams registered
+                </span>
+              </div>
+              <div style={styles.glassBarDivider} className="ffai-glassbar-divider" />
+              <div style={styles.glassBarItem} className="ffai-glassbar-item">
+                <Clock size={15} color="#3F7A3B" />
+                {timeLeft.closed ? (
+                  <span>Registration closed</span>
+                ) : (
+                  <span>
+                    <strong>
+                      {timeLeft.days}d {timeLeft.hours}h {timeLeft.mins}m
+                    </strong>{" "}
+                    left
+                  </span>
                 )}
               </div>
-              <Field
-                icon={<User size={16} />}
-                label="Team Leader Name"
-                required
-                placeholder="Enter team leader name"
-                value={team.leaderName}
-                onChange={updateTeam("leaderName")}
-                error={errors.leaderName}
-              />
-              <Field
-                icon={<Building2 size={16} />}
-                label="College / Organization"
-                required
-                list="college-list"
-                placeholder="Enter your college / organization"
-                value={team.college}
-                onChange={updateTeam("college")}
-                error={errors.college}
-              />
-              <Field
-                icon={<Mail size={16} />}
-                label="Email ID"
-                required
-                type="email"
-                placeholder="Enter email address"
-                value={team.email}
-                onChange={updateTeam("email")}
-                error={errors.email}
-              />
-              <Field
-                icon={<Phone size={16} />}
-                label="Phone Number"
-                required
-                type="tel"
-                inputMode="numeric"
-                maxLength={10}
-                placeholder="Enter 10-digit phone number"
-                value={team.phone}
-                onChange={updateTeam("phone")}
-                error={errors.phone}
-              />
-              <div>
-                <Field
-                  icon={<Phone size={16} />}
-                  label="Alternate Phone Number"
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={10}
-                  placeholder="Enter alternate phone number"
-                  value={team.altPhone}
-                  onChange={updateTeam("altPhone")}
-                  error={errors.altPhone}
-                />
-                <label style={styles.sameAsRow}>
-                  <input
-                    type="checkbox"
-                    style={styles.checkbox}
-                    checked={team.altPhone === team.phone && team.phone !== ""}
-                    onChange={(e) => setTeam((t) => ({ ...t, altPhone: e.target.checked ? t.phone : "" }))}
-                  />
-                  Same as phone number
-                </label>
-              </div>
-            </div>
-            <datalist id="college-list">
-              <option value="Kalasalingam University" />
-              <option value="IIT Madras" />
-              <option value="Anna University" />
-              <option value="VIT Vellore" />
-            </datalist>
-          </div>
-        )}
-
-        {step === 1 && (
-          <div>
-            <div style={styles.teamMembersHeader} className="ffai-team-header">
-              <div>
-                <SectionLabel icon={<Users size={16} />} text="TEAM MEMBERS" noMarginTop />
-                <p style={styles.helperText}>
-                  {allMembers.length}/{MAX_MEMBERS} added (including team leader)
-                </p>
-              </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={() => addMember("invite")} disabled={allMembers.length >= MAX_MEMBERS} style={styles.addMemberButton}>
-                  <Send size={14} /> Invite by email
-                </button>
-                <button
-                  type="button"
-                  onClick={() => addMember("manual")}
-                  disabled={allMembers.length >= MAX_MEMBERS}
-                  style={{ ...styles.addMemberButton, background: "transparent", color: "#2E6B2A", border: "1.5px solid #2E6B2A" }}
-                >
-                  <Plus size={14} /> Add manually
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.memberList}>
-              <MemberCard member={leaderMember} readOnly />
-              {members.map((mem, idx) => (
-                <MemberCard
-                  key={mem.id}
-                  member={mem}
-                  index={idx + 2}
-                  onRemove={() => removeMember(mem.id)}
-                  onChange={(field) => updateMember(mem.id, field)}
-                  onToggleSkill={(skill) => toggleSkill(mem.id, skill)}
-                  onInvite={() => sendInvite(mem.id)}
-                />
-              ))}
-            </div>
-            <p style={styles.helperNote}>
-              💡 Inviting by email sends teammates a link to fill in their own details — less typing for you, more
-              accurate data for us.
-            </p>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div>
-            <SectionLabel icon={<FileText size={16} />} text="PROJECT DETAILS" noMarginTop />
-            <Field
-              icon={<Lightbulb size={16} />}
-              label="Project Title / Idea"
-              required
-              placeholder="Enter your project title / idea"
-              value={project.title}
-              onChange={updateProject("title")}
-              error={errors.title}
-              full
-            />
-            <div style={{ marginTop: 18 }}>
-              <label style={styles.label}>
-                <FileText size={16} color="#14532B" style={{ marginRight: 6 }} />
-                Problem Statement
-              </label>
-              <textarea
-                style={styles.textarea}
-                placeholder="Briefly describe the problem your solution addresses"
-                rows={5}
-                value={project.problem}
-                onChange={updateProject("problem")}
-              />
-              <p style={styles.helperText}>{project.problem.length}/500 characters</p>
             </div>
           </div>
-        )}
 
-        {step === 3 && (
-          <div>
-            <SectionLabel icon={<CheckCircle2 size={16} />} text="REVIEW & SUBMIT" noMarginTop />
-            <ReviewBlock label="Team" onEdit={() => setStep(0)}>
-              <p><strong>{team.teamName}</strong> · {teamId}</p>
-              <p>{team.leaderName} · {team.college}</p>
-              <p>{team.email} · {team.phone}</p>
-            </ReviewBlock>
-            <ReviewBlock label={`Members (${allMembers.length})`} onEdit={() => setStep(1)}>
-              {allMembers.map((m) => (
-                <p key={m.id}>
-                  {m.name || "(pending invite)"} {m.isLeader && "— Leader"} {m.skills?.length ? `· ${m.skills.join(", ")}` : ""}
-                </p>
-              ))}
-            </ReviewBlock>
-            <ReviewBlock label="Project" onEdit={() => setStep(2)}>
-              <p><strong>{project.title}</strong></p>
-              <p style={{ color: "#4B6350" }}>{project.problem || "No description added"}</p>
-            </ReviewBlock>
-
-            <label style={styles.termsRow}>
-              <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={styles.checkbox} />
-              <span style={styles.termsText}>
-                I agree to the <span style={styles.termsLink}>terms and conditions</span>.
-              </span>
-            </label>
-            {errors.agreed && <p style={styles.errorTextCenter}>{errors.agreed}</p>}
-          </div>
-        )}
-
-        <div style={styles.navRow} className="ffai-nav-row">
-          {step > 0 ? (
-            <button type="button" onClick={goBack} style={styles.backButton}>
-              <ArrowLeft size={16} /> Back
-            </button>
-          ) : (
-            <span />
-          )}
-          {step < STEPS.length - 1 ? (
-            <button type="button" onClick={goNext} style={styles.ctaButtonSm}>
-              Next <ArrowRight size={16} />
-            </button>
-          ) : (
-            <button type="submit" style={styles.ctaButton}>
-              <Sprout size={18} /> PLANT YOUR IDEA
-            </button>
-          )}
-        </div>
+          <button type="button" onClick={onRegister} disabled={isFull} style={{ ...styles.ctaButton, ...styles.ctaButtonFull, ...(isFull ? styles.ctaButtonDisabled : {}) }}>
+            <Sprout size={18} /> {isFull ? "FIELD IS FULL" : "REGISTER NOW"}
+          </button>
         </div>
 
         <div style={styles.bottomZone}>
@@ -537,49 +444,267 @@ export default function FarmFusionRegistrationForm() {
           </div>
           <FieldIllustration />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Registration Desk page                                              */
+/* ------------------------------------------------------------------ */
+
+function RegisterPage({
+  team,
+  updateTeam,
+  teamId,
+  nameCheck,
+  errors,
+  allMembers,
+  leaderMember,
+  members,
+  addMember,
+  removeMember,
+  updateMember,
+  toggleSkill,
+  sendInvite,
+  project,
+  updateProject,
+  agreed,
+  setAgreed,
+  handleSubmit,
+  sectionRefs,
+}) {
+  return (
+    <div style={styles.registerWrap} className="ffai-register-wrap">
+      <form onSubmit={handleSubmit} noValidate>
+        <div style={styles.deskHeader} className="ffai-desk-header">
+          <span style={styles.kickerPill}>REGISTER</span>
+          <h1 style={styles.deskTitle} className="ffai-desk-title">REGISTRATION DESK</h1>
+          <p style={styles.deskSubtitle}>Register your crew for Farm Fusion AI</p>
+        </div>
+
+        <SectionCard label="TEAM NAME" refEl={sectionRefs.team}>
+          <div style={styles.teamNameFieldWrap}>
+            <Field
+              icon={<User size={16} />}
+              label="Team Name"
+              required
+              placeholder="Enter your team name"
+              value={team.teamName}
+              onChange={updateTeam("teamName")}
+              error={errors.teamName}
+              full
+            />
+            {!errors.teamName && nameCheck.status !== "idle" && (
+              <p
+                style={{
+                  ...styles.helperText,
+                  marginTop: 4,
+                  color: nameCheck.status === "taken" ? "#B4491F" : nameCheck.status === "ok" ? "#2E6B2A" : "#4B6350",
+                }}
+              >
+                {nameCheck.status === "checking" && "Checking availability…"}
+                {nameCheck.status === "ok" && "✓ Team name is available"}
+                {nameCheck.status === "taken" && "This team name is already registered"}
+              </p>
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard label="LEADER DETAILS" badge="TEAM LEADER">
+          <div style={styles.grid2} className="ffai-grid2">
+            <Field
+              icon={<User size={16} />}
+              label="Team Leader Name"
+              required
+              placeholder="Enter team leader name"
+              value={team.leaderName}
+              onChange={updateTeam("leaderName")}
+              error={errors.leaderName}
+            />
+            <Field
+              icon={<Building2 size={16} />}
+              label="College / Organization"
+              required
+              list="college-list"
+              placeholder="Enter your college / organization"
+              value={team.college}
+              onChange={updateTeam("college")}
+              error={errors.college}
+            />
+            <Field
+              icon={<Mail size={16} />}
+              label="Email ID"
+              required
+              type="email"
+              placeholder="Enter email address"
+              value={team.email}
+              onChange={updateTeam("email")}
+              error={errors.email}
+            />
+            <Field
+              icon={<Phone size={16} />}
+              label="Phone Number"
+              required
+              type="tel"
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="Enter 10-digit phone number"
+              value={team.phone}
+              onChange={updateTeam("phone")}
+              error={errors.phone}
+            />
+            <div>
+              <Field
+                icon={<Phone size={16} />}
+                label="Alternate Phone Number"
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="Enter alternate phone number"
+                value={team.altPhone}
+                onChange={updateTeam("altPhone")}
+                error={errors.altPhone}
+              />
+              <label style={styles.sameAsRow}>
+                <input
+                  type="checkbox"
+                  style={styles.checkbox}
+                  checked={team.altPhone === team.phone && team.phone !== ""}
+                  onChange={(e) => updateTeam("altPhone")({ target: { value: e.target.checked ? team.phone : "" } })}
+                />
+                Same as phone number
+              </label>
+            </div>
+          </div>
+          <datalist id="college-list">
+            <option value="Kalasalingam University" />
+            <option value="IIT Madras" />
+            <option value="Anna University" />
+            <option value="VIT Vellore" />
+          </datalist>
+        </SectionCard>
+
+        <SectionCard label="TEAM MEMBERS" refEl={sectionRefs.members}>
+          <div style={styles.teamMembersHeader} className="ffai-team-header">
+            <p style={styles.helperText}>
+              {allMembers.length}/{MAX_MEMBERS} added (including team leader)
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => addMember("invite")} disabled={allMembers.length >= MAX_MEMBERS} style={styles.addMemberButton}>
+                <Send size={14} /> Invite by email
+              </button>
+              <button
+                type="button"
+                onClick={() => addMember("manual")}
+                disabled={allMembers.length >= MAX_MEMBERS}
+                style={{ ...styles.addMemberButton, background: "transparent", color: "#2E6B2A", border: "1.5px solid #2E6B2A" }}
+              >
+                <Plus size={14} /> Add manually
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.memberGrid} className="ffai-member-grid">
+            <MemberCard member={leaderMember} readOnly />
+            {members.map((mem, idx) => (
+              <MemberCard
+                key={mem.id}
+                member={mem}
+                index={idx + 2}
+                onRemove={() => removeMember(mem.id)}
+                onChange={(field) => updateMember(mem.id, field)}
+                onToggleSkill={(skill) => toggleSkill(mem.id, skill)}
+                onInvite={() => sendInvite(mem.id)}
+              />
+            ))}
+          </div>
+          <p style={styles.helperNote}>
+            💡 Inviting by email sends teammates a link to fill in their own details — less typing for you, more
+            accurate data for us.
+          </p>
+        </SectionCard>
+
+        <SectionCard label="PROJECT DETAILS" refEl={sectionRefs.project}>
+          <Field
+            icon={<Lightbulb size={16} />}
+            label="Project Title / Idea"
+            required
+            placeholder="Enter your project title / idea"
+            value={project.title}
+            onChange={updateProject("title")}
+            error={errors.title}
+            full
+          />
+          <div style={{ marginTop: 18 }}>
+            <label style={styles.label}>
+              <FileText size={16} color="#14532B" style={{ marginRight: 6 }} />
+              Problem Statement
+            </label>
+            <textarea
+              style={styles.textarea}
+              placeholder="Briefly describe the problem your solution addresses"
+              rows={5}
+              value={project.problem}
+              onChange={updateProject("problem")}
+            />
+            <p style={styles.helperText}>{project.problem.length}/500 characters</p>
+          </div>
+        </SectionCard>
+
+        <SectionCard label="REVIEW & SUBMIT" refEl={sectionRefs.review}>
+          <ReviewBlock label="Team">
+            <p><strong>{team.teamName || "—"}</strong> · {teamId || "—"}</p>
+            <p>{team.leaderName || "—"} · {team.college || "—"}</p>
+            <p>{team.email || "—"} · {team.phone || "—"}</p>
+          </ReviewBlock>
+          <ReviewBlock label={`Members (${allMembers.length})`}>
+            {allMembers.map((m) => (
+              <p key={m.id}>
+                {m.name || "(pending invite)"} {m.isLeader && "— Leader"} {m.skills?.length ? `· ${m.skills.join(", ")}` : ""}
+              </p>
+            ))}
+          </ReviewBlock>
+          <ReviewBlock label="Project">
+            <p><strong>{project.title || "—"}</strong></p>
+            <p style={{ color: "#4B6350" }}>{project.problem || "No description added"}</p>
+          </ReviewBlock>
+
+          <label style={styles.termsRow}>
+            <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={styles.checkbox} />
+            <span style={styles.termsText}>
+              I agree to the <span style={styles.termsLink}>terms and conditions</span>.
+            </span>
+          </label>
+          {errors.agreed && <p style={styles.errorTextCenter}>{errors.agreed}</p>}
+
+          <div style={styles.navRow} className="ffai-nav-row">
+            <span />
+            <button type="submit" style={styles.ctaButton}>
+              <Sprout size={18} /> PLANT YOUR IDEA
+            </button>
+          </div>
+        </SectionCard>
+
+        <div style={styles.bottomZoneFlat}>
+          <div style={styles.footerTagline}>
+            <span style={styles.footerRule} />
+            <Sprout size={14} color="#2E6B2A" />
+            <span>Code the Future. Cultivate Change.</span>
+            <span style={styles.footerRule} />
+          </div>
+        </div>
       </form>
     </div>
   );
 }
 
-function Stepper({ step, pct }) {
+function SectionCard({ label, badge, refEl, children }) {
   return (
-    <div style={styles.stepperWrap}>
-      <div style={styles.stepperTrack}>
-        <div style={{ ...styles.stepperFill, width: `${pct}%` }} />
-      </div>
-      <div style={styles.stepperLabels} className="ffai-stepper-labels">
-        {STEPS.map((label, i) => (
-          <div key={label} style={styles.stepperLabelItem}>
-            <div
-              style={{
-                ...styles.stepDot,
-                background: i <= step ? "#2E6B2A" : "#DDE6D1",
-                color: i <= step ? "#F7F4EA" : "#7A8C74",
-              }}
-            >
-              {i < step ? <Check size={12} /> : i + 1}
-            </div>
-            <span style={{ color: i === step ? "#14532B" : "#7A8C74", fontWeight: i === step ? 700 : 500 }}>{label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SectionLabel({ icon, text, noMarginTop }) {
-  return (
-    <div style={{ ...styles.sectionLabelWrap, marginTop: noMarginTop ? 0 : 28 }}>
-      <span style={styles.kickerPill}>{text.split(" ")[0]}</span>
-      <div style={styles.sectionLabel}>
-        <span style={styles.sectionIcon}>{icon}</span>
-        {text}
-      </div>
-      <div style={styles.growLineTrack}>
-        <div style={styles.growLineFill} />
-        <div style={styles.growLineDot} />
-      </div>
+    <div style={styles.sectionCard} className="ffai-section-card" ref={refEl}>
+      <span style={styles.sectionPill}>{label}</span>
+      {badge && <span style={styles.sectionBadge}>{badge}</span>}
+      <div style={styles.sectionCardBody}>{children}</div>
     </div>
   );
 }
@@ -658,21 +783,18 @@ function MemberCard({ member, index, readOnly, onRemove, onChange, onToggleSkill
   );
 }
 
-function ReviewBlock({ label, children, onEdit }) {
+function ReviewBlock({ label, children }) {
   return (
     <div style={styles.reviewBlock}>
       <div style={styles.reviewBlockHeader}>
         <span style={styles.reviewBlockLabel}>{label}</span>
-        <button type="button" onClick={onEdit} style={styles.editButton}>
-          <Pencil size={12} /> Edit
-        </button>
       </div>
       <div style={styles.reviewBlockBody}>{children}</div>
     </div>
   );
 }
 
-function SuccessTicket({ team, teamId, project, onReset }) {
+function SuccessTicket({ team, teamId, project, onReset, onHome }) {
   const canvasRef = useRef(null);
 
   // QR now encodes the full team/user information (not just the bare team ID)
@@ -715,16 +837,13 @@ function SuccessTicket({ team, teamId, project, onReset }) {
     canvas.height = H;
 
     const drawBaseLayout = () => {
-      // page background
       ctx.fillStyle = "#EFEBDD";
       ctx.fillRect(0, 0, W, H);
 
-      // card clip (rounded outer edge)
       ctx.save();
       roundRectPath(ctx, 6, 6, W - 12, H - 12, CARD_R);
       ctx.clip();
 
-      // header bar
       ctx.fillStyle = "#14532B";
       ctx.fillRect(0, 0, W, HEADER_H);
       ctx.fillStyle = "#F7F4EA";
@@ -733,15 +852,12 @@ function SuccessTicket({ team, teamId, project, onReset }) {
       ctx.textBaseline = "alphabetic";
       ctx.fillText("FARM FUSION AI — HACKATHON TICKET", 26, 36);
 
-      // main (cream) panel
       ctx.fillStyle = "#F7F4EA";
       ctx.fillRect(0, HEADER_H, MAIN_W, H - HEADER_H);
 
-      // stub (dark green) panel
       ctx.fillStyle = "#0F3D2E";
       ctx.fillRect(MAIN_W, HEADER_H, STUB_W, H - HEADER_H);
 
-      // dashed divider between the two panels
       ctx.strokeStyle = "#C9D6BE";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([5, 6]);
@@ -751,7 +867,6 @@ function SuccessTicket({ team, teamId, project, onReset }) {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // ---- main panel content ----
       const padX = 28;
       let y = HEADER_H + 46;
       ctx.fillStyle = "#3F7A3B";
@@ -771,7 +886,6 @@ function SuccessTicket({ team, teamId, project, onReset }) {
       y += 22;
       ctx.fillText(`${project.title || "your project"}`, padX, y);
 
-      // team-id badge (rounded pill)
       const badgeText = teamId || "—";
       ctx.font = "bold 13px sans-serif";
       const badgeTextW = ctx.measureText(badgeText).width;
@@ -789,7 +903,6 @@ function SuccessTicket({ team, teamId, project, onReset }) {
       ctx.fillText(badgeText, padX + badgeW / 2, badgeY + badgeH / 2 + 5);
       ctx.textAlign = "left";
 
-      // ---- stub panel label (QR drawn afterwards, once/if it loads) ----
       ctx.fillStyle = "#C9E4B8";
       ctx.font = "bold 10px sans-serif";
       ctx.textAlign = "center";
@@ -798,17 +911,15 @@ function SuccessTicket({ team, teamId, project, onReset }) {
 
       ctx.restore();
 
-      // outer card border, drawn after clip is released
       ctx.strokeStyle = "#14532B";
       ctx.lineWidth = 3;
       roundRectPath(ctx, 6, 6, W - 12, H - 12, CARD_R);
       ctx.stroke();
 
-      // footer strip beneath the card
       ctx.fillStyle = "#4B6350";
       ctx.font = "12px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("Code the Future. Cultivate Change.", W / 2, H - 4 > H ? H - 4 : H - 6);
+      ctx.fillText("Code the Future. Cultivate Change.", W / 2, H - 6);
       ctx.textAlign = "left";
     };
 
@@ -825,7 +936,6 @@ function SuccessTicket({ team, teamId, project, onReset }) {
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.onload = () => {
-        // Center the QR in the stub panel, above its label.
         const qrSize = Math.min(STUB_W - 40, H - HEADER_H - 90);
         const qrX = MAIN_W + (STUB_W - qrSize) / 2;
         const qrY = HEADER_H + (H - HEADER_H - 44 - qrSize) / 2;
@@ -912,8 +1022,8 @@ function SuccessTicket({ team, teamId, project, onReset }) {
         <button type="button" style={styles.backButton} onClick={shareTicket}>
           <Share2 size={16} /> Share
         </button>
-        <button type="button" style={styles.backButton} onClick={onReset}>
-          <ArrowLeft size={16} /> Back to form
+        <button type="button" style={styles.backButton} onClick={onHome}>
+          <ArrowLeft size={16} /> Back to home
         </button>
       </div>
     </div>
@@ -980,93 +1090,81 @@ function FieldIllustration() {
 }
 
 const styles = {
-  page: { minHeight: "100vh", width: "100%", background: "#EFEBDD", display: "flex", justifyContent: "center", padding: "32px 16px", position: "relative", fontFamily: "'Poppins','Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif", boxSizing: "border-box" },
-  card: { position: "relative", zIndex: 1, width: "100%", maxWidth: 660, borderRadius: 28, border: "3px solid #14532B", boxShadow: "0 20px 50px rgba(20,83,43,0.18)", overflow: "hidden" },
-  heroZone: { position: "relative", overflow: "hidden", padding: "48px 32px 34px 32px", background: "#EFE7D0" },
-  heroBackdropSvg: { position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: 0 },
-  heroContent: { position: "relative", zIndex: 2 },
-  formZone: { position: "relative", background: "#F7F4EA", padding: "34px 32px 0 32px" },
-  bottomZone: { position: "relative", background: "#EFE7D0" },
-  footerTagline: {
-    position: "relative",
-    zIndex: 1,
-    textAlign: "center",
-    color: "#2F5233",
-    fontSize: 13,
-    fontWeight: 600,
-    letterSpacing: 0.4,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    padding: "18px 0 4px",
-  },
-  footerRule: { width: 40, height: 1, background: "#A9BB9C" },
-  eyebrowRow: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 18 },
+  page: { minHeight: "100vh", width: "100%", background: "#EFEBDD", display: "flex", flexDirection: "column", alignItems: "center", padding: "0 0 32px", position: "relative", fontFamily: "'Poppins','Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif", boxSizing: "border-box" },
+
+  /* Nav */
+  navBar: { position: "relative", zIndex: 2, width: "100%", maxWidth: 900, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 20px", boxSizing: "border-box" },
+  navLogo: { display: "flex", alignItems: "center", gap: 8, fontSize: 17, fontWeight: 800, color: "#14532B", background: "transparent", border: "none", cursor: "pointer", padding: 0 },
+  navLogoBadge: { width: 26, height: 26, borderRadius: 8, background: "#2E6B2A", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  navPillRow: { display: "flex", gap: 8 },
+  navPill: { display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.6)", color: "#2F5233", border: "1.5px solid #C9D6BE", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" },
+  navPillActive: { background: "#14532B", color: "#F7F4EA", borderColor: "#14532B" },
+
+  /* Home page */
+  homeWrap: { position: "relative", zIndex: 1, width: "100%", maxWidth: 900, display: "flex", justifyContent: "center", padding: "10px 16px", boxSizing: "border-box" },
+  homeCard: { position: "relative", width: "100%", maxWidth: 660, borderRadius: 28, border: "3px solid #14532B", boxShadow: "0 20px 50px rgba(20,83,43,0.18)", overflow: "hidden" },
+  cornerTagLeft: { position: "absolute", top: 14, left: 14, zIndex: 3, background: "#2E6B2A", color: "#F7F4EA", fontSize: 10.5, fontWeight: 800, letterSpacing: 1, padding: "5px 10px", borderRadius: 6 },
+  cornerTagRight: { position: "absolute", top: 14, right: 14, zIndex: 3, background: "#C9A227", color: "#3B2E06", fontSize: 10.5, fontWeight: 800, letterSpacing: 1, padding: "5px 10px", borderRadius: 6 },
+  homeEmblem: { width: 54, height: 54, borderRadius: "50%", background: "linear-gradient(135deg,#2E6B2A,#14532B)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px", boxShadow: "0 8px 18px rgba(20,83,43,0.3)" },
+  homeBody: { position: "relative", background: "#F7F4EA", padding: "26px 32px 4px", display: "flex", flexDirection: "column", gap: 16 },
+
+  alertBox: { display: "flex", alignItems: "flex-start", justifyContent: "flex-start", gap: 12, borderRadius: 14, padding: "14px 16px", border: "1.5px solid", textAlign: "left" },
+  alertBoxOpen: { background: "#E6F0E0", borderColor: "#B9D8A8" },
+  alertBoxFull: { background: "#F7E8E1", borderColor: "#E3B7A4" },
+  alertTextWrap: { textAlign: "left", flex: 1 },
+  alertTitle: { margin: 0, fontSize: 14.5, fontWeight: 800, color: "#22422A", textAlign: "left" },
+  alertSubtitle: { margin: "2px 0 0", fontSize: 12.5, color: "#4B6350", textAlign: "left" },
+
+  progressCard: { background: "#FCFBF6", border: "1.5px solid #DDE6D1", borderRadius: 14, padding: "14px 16px" },
+  progressHeaderRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
+  progressLabel: { display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 800, letterSpacing: 0.8, color: "#14532B" },
+  progressCount: { fontSize: 12, fontWeight: 700, color: "#4B6350" },
+  progressTrack: { position: "relative", height: 10, background: "#DDE6D1", borderRadius: 999, overflow: "visible" },
+  progressFill: { height: "100%", background: "linear-gradient(90deg,#2E6B2A,#4A8C3F)", borderRadius: 999, transition: "width .35s ease" },
+  progressMarker: { position: "absolute", top: "50%", transform: "translateY(-50%)", width: 22, height: 22, borderRadius: "50%", background: "#C9A227", border: "2px solid #F7F4EA", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 6px rgba(0,0,0,0.2)" },
+
+  ctaButtonFull: { width: "auto", minWidth: 240, alignSelf: "center", justifyContent: "center", marginTop: 4, marginBottom: 20 },
+  ctaButtonDisabled: { background: "#B9C4AF", boxShadow: "none", cursor: "not-allowed" },
+
+  /* Register page */
+  registerWrap: { position: "relative", zIndex: 1, width: "100%", maxWidth: 700, padding: "10px 16px 0", boxSizing: "border-box" },
+  deskHeader: { textAlign: "center", background: "#F7F4EA", border: "3px solid #14532B", borderRadius: 20, padding: "26px 20px", marginBottom: 22, boxShadow: "0 14px 32px rgba(20,83,43,0.14)" },
+  deskTitle: { margin: "6px 0 4px", fontSize: 28, fontWeight: 800, color: "#14532B", letterSpacing: -0.5 },
+  deskSubtitle: { margin: 0, fontSize: 13.5, color: "#3F7A3B", fontWeight: 700, letterSpacing: 0.5 },
+
+  sectionCard: { position: "relative", background: "#F7F4EA", border: "1.5px solid #DDE6D1", borderRadius: 18, padding: "26px 24px 20px", marginBottom: 20, boxShadow: "0 8px 22px rgba(20,83,43,0.08)" },
+  sectionCardBody: {},
+  sectionPill: { position: "absolute", top: -13, left: 20, background: "#2E6B2A", color: "#F7F4EA", fontSize: 11, fontWeight: 800, letterSpacing: 1.2, padding: "6px 14px", borderRadius: 999, boxShadow: "0 4px 10px rgba(20,83,43,0.25)" },
+  sectionBadge: { position: "absolute", top: -13, right: 20, background: "#C9A227", color: "#3B2E06", fontSize: 10, fontWeight: 800, letterSpacing: 0.8, padding: "6px 12px", borderRadius: 999 },
+  teamNameFieldWrap: { marginTop: 4 },
+
+  eyebrowRow: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 14 },
   eyebrowRule: { width: 34, height: 1, background: "#A9BB9C" },
   eyebrowText: { fontSize: 11.5, fontWeight: 700, letterSpacing: 2, color: "#3F7A3B", textTransform: "uppercase", whiteSpace: "nowrap" },
-  title: { textAlign: "center", fontSize: 40, fontWeight: 800, color: "#14532B", margin: "4px 0 2px", letterSpacing: -0.5 },
+  title: { textAlign: "center", fontSize: 38, fontWeight: 800, color: "#14532B", margin: "4px 0 2px", letterSpacing: -0.5 },
   titleAccent: { color: "#3F9142" },
-  tagline: { textAlign: "center", color: "#2F5233", fontSize: 17, margin: "2px 0 10px" },
-  hackathonBadge: { display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 18 },
-  hackathonText: { color: "#3F7A3B", fontWeight: 800, fontSize: 22, letterSpacing: 2 },
-  glassBarWrap: { position: "relative", display: "flex", justifyContent: "center", marginBottom: 34 },
-  glassBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 0,
-    background: "rgba(255,255,255,0.55)",
-    backdropFilter: "blur(10px)",
-    WebkitBackdropFilter: "blur(10px)",
-    border: "1px solid rgba(255,255,255,0.8)",
-    borderRadius: 999,
-    padding: "10px 22px",
-    boxShadow: "0 12px 30px rgba(20,83,43,0.14)",
-  },
+  tagline: { textAlign: "center", color: "#2F5233", fontSize: 16, margin: "2px 0 10px" },
+  hackathonBadge: { display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 4 },
+  hackathonText: { color: "#3F7A3B", fontWeight: 800, fontSize: 21, letterSpacing: 2 },
+
+  glassBarWrap: { position: "relative", display: "flex", justifyContent: "center" },
+  glassBar: { display: "flex", alignItems: "center", gap: 0, background: "rgba(255,255,255,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.8)", borderRadius: 999, padding: "10px 22px", boxShadow: "0 12px 30px rgba(20,83,43,0.14)" },
   glassBarItem: { display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: "#2F5233", whiteSpace: "nowrap" },
   glassBarDivider: { width: 1, height: 16, background: "#C9D6BE", margin: "0 16px" },
-  waxSeal: {
-    position: "absolute",
-    top: -14,
-    right: "18%",
-    display: "flex",
-    alignItems: "center",
-    gap: 5,
-    background: "linear-gradient(135deg,#C9A227,#A9821D)",
-    color: "#F7F4EA",
-    fontSize: 11,
-    fontWeight: 700,
-    padding: "6px 12px",
-    borderRadius: 999,
-    boxShadow: "0 6px 14px rgba(169,130,29,0.4)",
-    transform: "rotate(4deg)",
-  },
+
+  waxSeal: { position: "absolute", top: -14, right: "18%", display: "flex", alignItems: "center", gap: 5, background: "linear-gradient(135deg,#C9A227,#A9821D)", color: "#F7F4EA", fontSize: 11, fontWeight: 700, padding: "6px 12px", borderRadius: 999, boxShadow: "0 6px 14px rgba(169,130,29,0.4)", transform: "rotate(4deg)" },
   waxSealText: { letterSpacing: 0.3 },
-  kickerPill: {
-    display: "inline-block",
-    background: "#DCEFD6",
-    color: "#2E6B2A",
-    fontSize: 10.5,
-    fontWeight: 800,
-    letterSpacing: 1.2,
-    padding: "3px 10px",
-    borderRadius: 999,
-    marginBottom: 8,
-  },
-  statsStrip: { display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", marginBottom: 22 },
-  statChip: { display: "flex", alignItems: "center", gap: 6, background: "#E6F0E0", color: "#2F5233", fontSize: 12.5, padding: "7px 12px", borderRadius: 999, fontWeight: 500 },
-  stepperWrap: { marginBottom: 30 },
-  stepperTrack: { height: 5, background: "#DDE6D1", borderRadius: 4, overflow: "hidden", marginBottom: 12 },
-  stepperFill: { height: "100%", background: "linear-gradient(90deg,#2E6B2A,#4A8C3F)", borderRadius: 4, transition: "width .35s ease" },
-  stepperLabels: { display: "flex", justifyContent: "space-between" },
-  stepperLabelItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, fontSize: 11.5, flex: 1 },
-  stepDot: { width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, transition: "background .2s ease" },
-  sectionLabelWrap: { marginBottom: 14 },
-  sectionLabel: { display: "flex", alignItems: "center", gap: 8, color: "#14532B", fontWeight: 700, fontSize: 15, letterSpacing: 0.5 },
-  sectionIcon: { display: "inline-flex", color: "#3F7A3B" },
-  growLineTrack: { position: "relative", height: 3, width: 120, background: "#DDE6D1", borderRadius: 4, marginTop: 6 },
-  growLineFill: { position: "absolute", left: 0, top: 0, height: "100%", width: "70%", background: "#3F7A3B", borderRadius: 4, animation: "growLine 2.4s ease-in-out infinite alternate" },
-  growLineDot: { position: "absolute", left: "70%", top: "50%", width: 7, height: 7, marginLeft: -3.5, marginTop: -3.5, borderRadius: "50%", background: "#C9A227", animation: "growLine 2.4s ease-in-out infinite alternate", boxShadow: "0 0 0 4px rgba(201,162,39,0.18)" },
+
+  heroZone: { position: "relative", overflow: "hidden", padding: "48px 32px 28px 32px", background: "#EFE7D0" },
+  heroBackdropSvg: { position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: 0 },
+  heroContent: { position: "relative", zIndex: 2 },
+  bottomZone: { position: "relative", background: "#EFE7D0" },
+  bottomZoneFlat: { position: "relative", padding: "8px 0 4px" },
+  footerTagline: { position: "relative", zIndex: 1, textAlign: "center", color: "#2F5233", fontSize: 13, fontWeight: 600, letterSpacing: 0.4, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "18px 0 4px" },
+  footerRule: { width: 40, height: 1, background: "#A9BB9C" },
+
+  kickerPill: { display: "inline-block", background: "#DCEFD6", color: "#2E6B2A", fontSize: 10.5, fontWeight: 800, letterSpacing: 1.2, padding: "3px 10px", borderRadius: 999, marginBottom: 8 },
+
   grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 20, rowGap: 16 },
   fieldWrap: {},
   label: { display: "flex", alignItems: "center", fontSize: 13.5, fontWeight: 600, color: "#22422A", marginBottom: 6 },
@@ -1079,9 +1177,10 @@ const styles = {
   helperNote: { fontSize: 12.5, color: "#4B6350", marginTop: 12, fontStyle: "italic" },
   sameAsRow: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#4B6350", marginTop: 6, cursor: "pointer" },
   textarea: { width: "100%", boxSizing: "border-box", padding: "12px 14px", borderRadius: 10, border: "1.5px solid #C9D6BE", background: "#FCFBF6", fontSize: 14.5, color: "#22422A", outline: "none", resize: "vertical", fontFamily: "inherit" },
+
   teamMembersHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16, flexWrap: "wrap", gap: 12 },
   addMemberButton: { display: "inline-flex", alignItems: "center", gap: 6, background: "#2E6B2A", color: "#F7F4EA", border: "none", borderRadius: 999, padding: "9px 16px", fontWeight: 700, fontSize: 12.5, cursor: "pointer" },
-  memberList: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 6 },
+  memberGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 6 },
   memberCard: { background: "#FCFBF6", border: "1.5px solid #DDE6D1", borderRadius: 14, padding: "12px 14px" },
   memberCardHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" },
   memberIndex: { width: 22, height: 22, borderRadius: "50%", background: "#DCEFD6", color: "#14532B", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
@@ -1098,6 +1197,7 @@ const styles = {
   skillChipRow: { display: "flex", gap: 6, flexWrap: "wrap" },
   skillChip: { fontSize: 11.5, padding: "5px 11px", borderRadius: 999, border: "1.5px solid #C9D6BE", background: "#F7F4EA", color: "#4B6350", cursor: "pointer" },
   skillChipActive: { background: "#2E6B2A", color: "#F7F4EA", borderColor: "#2E6B2A" },
+
   reviewBlock: { border: "1.5px solid #DDE6D1", borderRadius: 12, padding: "12px 14px", marginBottom: 12, background: "#FCFBF6" },
   reviewBlockHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
   reviewBlockLabel: { fontSize: 12.5, fontWeight: 700, color: "#14532B", textTransform: "uppercase", letterSpacing: 0.5 },
@@ -1107,46 +1207,16 @@ const styles = {
   checkbox: { marginTop: 3, width: 16, height: 16, accentColor: "#2E6B2A" },
   termsText: { fontSize: 13.5, color: "#22422A" },
   termsLink: { color: "#2E6B2A", fontWeight: 700, textDecoration: "underline" },
-  navRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 30, marginBottom: 6, gap: 10 },
+  navRow: { display: "flex", justifyContent: "flex-end", alignItems: "center", marginTop: 20, gap: 10 },
   backButton: { display: "inline-flex", alignItems: "center", gap: 8, background: "transparent", color: "#2E6B2A", border: "1.5px solid #2E6B2A", borderRadius: 999, padding: "12px 22px", fontSize: 14, fontWeight: 700, cursor: "pointer" },
-  ctaButtonSm: { display: "inline-flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg,#2E6B2A,#14532B)", color: "#F7F4EA", border: "none", borderRadius: 999, padding: "12px 22px", fontSize: 14, fontWeight: 700, cursor: "pointer" },
   ctaButton: { display: "inline-flex", alignItems: "center", gap: 10, background: "linear-gradient(135deg,#2E6B2A,#14532B)", color: "#F7F4EA", border: "none", borderRadius: 999, padding: "16px 34px", fontSize: 15.5, fontWeight: 800, letterSpacing: 1, cursor: "pointer", boxShadow: "0 10px 24px rgba(20,83,43,0.35)" },
   illustrationWrap: { marginTop: 6, lineHeight: 0 },
-  footerStrip: { background: "#0F3D2E", color: "#DCEFD6", fontSize: 13, fontWeight: 600, letterSpacing: 0.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 0", marginLeft: -32, marginRight: -32 },
-  ticketOuter: {
-    position: "relative",
-    zIndex: 1,
-    width: "100%",
-    maxWidth: 620,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    padding: "20px 12px 40px",
-    boxSizing: "border-box",
-  },
-  ticketGlow: {
-    position: "absolute",
-    top: -40,
-    width: 380,
-    height: 380,
-    borderRadius: "50%",
-    background: "radial-gradient(circle, rgba(95,209,224,0.28) 0%, rgba(46,107,42,0.16) 45%, rgba(46,107,42,0) 72%)",
-    pointerEvents: "none",
-    zIndex: -1,
-  },
+
+  ticketOuter: { position: "relative", zIndex: 1, width: "100%", maxWidth: 620, display: "flex", flexDirection: "column", alignItems: "center", padding: "20px 12px 40px", boxSizing: "border-box" },
+  ticketGlow: { position: "absolute", top: -40, width: 380, height: 380, borderRadius: "50%", background: "radial-gradient(circle, rgba(95,209,224,0.28) 0%, rgba(46,107,42,0.16) 45%, rgba(46,107,42,0) 72%)", pointerEvents: "none", zIndex: -1 },
   ticketKicker: { fontSize: 12.5, fontWeight: 700, letterSpacing: 2, color: "#3F7A3B", marginBottom: 6 },
   ticketHeadline: { textAlign: "center", fontSize: 34, lineHeight: 1.15, fontWeight: 800, color: "#14532B", letterSpacing: -0.5, margin: "0 0 28px" },
-  ticketCard: {
-    position: "relative",
-    display: "flex",
-    width: "100%",
-    background: "#F7F4EA",
-    border: "3px solid #14532B",
-    borderRadius: 22,
-    boxShadow: "0 24px 50px rgba(20,83,43,0.22)",
-    overflow: "hidden",
-    boxSizing: "border-box",
-  },
+  ticketCard: { position: "relative", display: "flex", width: "100%", background: "#F7F4EA", border: "3px solid #14532B", borderRadius: 22, boxShadow: "0 24px 50px rgba(20,83,43,0.22)", overflow: "hidden", boxSizing: "border-box" },
   ticketNotchLeft: { position: "absolute", left: "calc(72% - 12px)", top: -14, width: 26, height: 26, borderRadius: "50%", background: "#EFEBDD", border: "3px solid #14532B" },
   ticketNotchRight: { position: "absolute", left: "calc(72% - 12px)", bottom: -14, width: 26, height: 26, borderRadius: "50%", background: "#EFEBDD", border: "3px solid #14532B" },
   ticketMain: { flex: "0 0 72%", padding: "26px 24px", display: "flex", flexDirection: "column", gap: 6, boxSizing: "border-box" },
@@ -1154,38 +1224,10 @@ const styles = {
   ticketTeamName: { fontSize: 26, fontWeight: 800, color: "#14532B", margin: "0 0 6px" },
   ticketLine: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#4B6350", margin: 0 },
   ticketBadgeRow: { marginTop: 14 },
-  waxSealLg: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    background: "linear-gradient(135deg,#C9A227,#A9821D)",
-    color: "#F7F4EA",
-    fontSize: 12.5,
-    fontWeight: 700,
-    padding: "7px 14px",
-    borderRadius: 999,
-    boxShadow: "0 6px 14px rgba(169,130,29,0.35)",
-  },
-  ticketDivider: {
-    flex: "0 0 1px",
-    display: "flex",
-    flexDirection: "column",
-    justifyContent: "space-evenly",
-    alignItems: "center",
-    padding: "18px 0",
-  },
+  waxSealLg: { display: "inline-flex", alignItems: "center", gap: 6, background: "linear-gradient(135deg,#C9A227,#A9821D)", color: "#F7F4EA", fontSize: 12.5, fontWeight: 700, padding: "7px 14px", borderRadius: 999, boxShadow: "0 6px 14px rgba(169,130,29,0.35)" },
+  ticketDivider: { flex: "0 0 1px", display: "flex", flexDirection: "column", justifyContent: "space-evenly", alignItems: "center", padding: "18px 0" },
   ticketDividerDot: { width: 4, height: 4, borderRadius: "50%", background: "#C9D6BE" },
-  ticketStub: {
-    flex: "0 0 28%",
-    background: "#0F3D2E",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    padding: "20px 14px",
-    boxSizing: "border-box",
-  },
+  ticketStub: { flex: "0 0 28%", background: "#0F3D2E", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: "20px 14px", boxSizing: "border-box" },
   ticketStubLabel: { color: "#C9E4B8", fontSize: 9.5, fontWeight: 700, letterSpacing: 1, textAlign: "center" },
 };
 
@@ -1193,24 +1235,25 @@ if (typeof document !== "undefined" && !document.getElementById("ffai-keyframes"
   const style = document.createElement("style");
   style.id = "ffai-keyframes";
   style.innerHTML = `
-    @keyframes growLine { from { transform: none; opacity: 0.55; } to { transform: translateX(6px); opacity: 1; } }
     input:focus, textarea:focus { border-color: #2E6B2A !important; box-shadow: 0 0 0 3px rgba(46,107,42,0.15) !important; }
 
     /* ---- Responsive breakpoints ---- */
     @media (max-width: 640px) {
-      .ffai-page { padding: 16px 8px !important; }
+      .ffai-navbar { padding: 14px !important; }
       .ffai-hero { padding: 32px 18px 22px 18px !important; }
-      .ffai-title { font-size: 28px !important; }
+      .ffai-title { font-size: 26px !important; }
       .ffai-tagline { font-size: 14px !important; }
-      .ffai-hackathon-text { font-size: 17px !important; letter-spacing: 1px !important; }
+      .ffai-hackathon-text { font-size: 16px !important; letter-spacing: 1px !important; }
+      .ffai-home-body { padding: 22px 18px 4px !important; }
       .ffai-glassbar { flex-wrap: wrap !important; justify-content: center !important; gap: 6px 4px !important; padding: 10px 14px !important; }
       .ffai-glassbar-item { font-size: 11.5px !important; }
       .ffai-glassbar-divider { display: none !important; }
-      .ffai-wax-seal { right: 8% !important; }
-      .ffai-formzone { padding: 24px 16px 0 16px !important; }
+      .ffai-desk-title { font-size: 22px !important; }
+      .ffai-section-card { padding: 22px 16px 16px !important; }
       .ffai-grid2 { grid-template-columns: 1fr !important; column-gap: 0 !important; }
+      .ffai-member-grid { grid-template-columns: 1fr !important; }
       .ffai-team-header { align-items: flex-start !important; }
-      .ffai-nav-row { flex-wrap: wrap !important; }
+      .ffai-nav-row { flex-wrap: wrap !important; justify-content: center !important; }
       .ffai-ticket-headline { font-size: 26px !important; margin-bottom: 20px !important; }
       .ffai-ticket-card { flex-direction: column !important; }
       .ffai-ticket-main { flex: 1 1 auto !important; padding: 22px 18px !important; }
@@ -1219,9 +1262,8 @@ if (typeof document !== "undefined" && !document.getElementById("ffai-keyframes"
       .ffai-notch-left, .ffai-notch-right { display: none !important; }
     }
     @media (max-width: 420px) {
-      .ffai-title { font-size: 24px !important; }
-      .ffai-hackathon-text { font-size: 15px !important; }
-      .ffai-stepper-labels span { font-size: 10px !important; }
+      .ffai-title { font-size: 22px !important; }
+      .ffai-hackathon-text { font-size: 14px !important; }
       .ffai-ticket-headline { font-size: 22px !important; }
       .ffai-ticket-stub { flex-direction: column !important; }
     }
